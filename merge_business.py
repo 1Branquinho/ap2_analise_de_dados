@@ -14,44 +14,63 @@ W        = 72
 
 
 # ════════════════════════════════════════════════════════════════════
+# Helpers
+# ════════════════════════════════════════════════════════════════════
+
+def ano_tri_to_date(ano_tri):
+    """Converte '20244T' → '2024-12-31'"""
+    year = ano_tri[:4]
+    q    = ano_tri[4]
+    fim  = {"1": "03-31", "2": "06-30", "3": "09-30", "4": "12-31"}
+    return f"{year}-{fim[q]}"
+
+
+def flt(val):
+    try:
+        return float(val) if val is not None else 0.0
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def safe_div(a, b):
+    return (a / b) if b and b != 0 else None
+
+
+def v(df, conta):
+    res = df[df["conta"] == conta]["valor"]
+    if res.empty:
+        return 0.0
+    return flt(res.iloc[0])
+
+
+# ════════════════════════════════════════════════════════════════════
 # Funções de coleta
 # ════════════════════════════════════════════════════════════════════
 
 def fetch_balanco(ticker, ano_tri):
     resp = requests.get(
-        f"{BASE_URL}/bolsa/balanco",
-        headers=HEADERS,
+        f"{BASE_URL}/bolsa/balanco", headers=HEADERS,
         params={"ticker": ticker, "ano_tri": ano_tri},
     )
     resp.raise_for_status()
     return pd.DataFrame(resp.json()[0]["balanco"])
 
 
-def fetch_dre(ticker, ano_tri):
+def fetch_financeiro(ticker, ano_tri):
+    """Retorna dict flat com receita, ebit, lucro, pl, divida_liquida, capital..."""
     resp = requests.get(
-        f"{BASE_URL}/bolsa/financeiro",
-        headers=HEADERS,
+        f"{BASE_URL}/bolsa/financeiro", headers=HEADERS,
         params={"ticker": ticker, "ano_tri": ano_tri},
     )
     resp.raise_for_status()
-    data = resp.json()
-    # Tenta as estruturas mais comuns da API
-    if isinstance(data, list) and data:
-        first = data[0]
-        for key in ["financeiro", "dre", "dados", "resultado"]:
-            if key in first:
-                return pd.DataFrame(first[key])
-        # Se não tiver chave aninhada, tenta usar diretamente
-        if isinstance(first, dict) and "conta" in first:
-            return pd.DataFrame(data)
-    return pd.DataFrame(data)
+    return resp.json()[0]
 
 
-def fetch_indicador(ticker, ano_tri):
+def fetch_indicador(ticker, data_base):
+    """Retorna indicadores de mercado (VPA, LPA, P/L, DY). Requer data_base='YYYY-MM-DD'."""
     resp = requests.get(
-        f"{BASE_URL}/bolsa/indicador",
-        headers=HEADERS,
-        params={"ticker": ticker, "ano_tri": ano_tri},
+        f"{BASE_URL}/bolsa/indicador", headers=HEADERS,
+        params={"ticker": ticker, "data_base": data_base},
     )
     resp.raise_for_status()
     return resp.json()
@@ -59,8 +78,7 @@ def fetch_indicador(ticker, ano_tri):
 
 def fetch_preco_acao(ticker):
     resp = requests.get(
-        f"{BASE_URL}/preco/corrigido",
-        headers=HEADERS,
+        f"{BASE_URL}/preco/corrigido", headers=HEADERS,
         params={"ticker": ticker, "data_ini": DATA_INI, "data_fim": DATA_FIM},
     )
     resp.raise_for_status()
@@ -72,8 +90,7 @@ def fetch_preco_acao(ticker):
 
 def fetch_ibov():
     resp = requests.get(
-        f"{BASE_URL}/preco/diversos",
-        headers=HEADERS,
+        f"{BASE_URL}/preco/diversos", headers=HEADERS,
         params={"ticker": "ibov", "data_ini": DATA_INI, "data_fim": DATA_FIM},
     )
     resp.raise_for_status()
@@ -83,60 +100,9 @@ def fetch_ibov():
     return df.set_index("data")[["fechamento"]].rename(columns={"fechamento": "IBOV"})
 
 
-def v(df, conta):
-    res = df[df["conta"] == conta]["valor"]
-    if res.empty:
-        return 0.0
-    try:
-        return float(res.iloc[0])
-    except (ValueError, TypeError):
-        return 0.0
-
-
-def safe_div(a, b):
-    return (a / b) if b and b != 0 else None
-
-
 # ════════════════════════════════════════════════════════════════════
 # Coleta de preços e métricas de mercado
 # ════════════════════════════════════════════════════════════════════
-# ════════════════════════════════════════════════════════════════════
-# DEBUG — rode isso uma vez para ver a estrutura dos endpoints
-# Depois pode comentar esse bloco
-# ════════════════════════════════════════════════════════════════════
-print("=== DEBUG /bolsa/financeiro ===")
-r = requests.get(f"{BASE_URL}/bolsa/financeiro", headers=HEADERS,
-                 params={"ticker": "ABEV3", "ano_tri": ANO_TRI})
-print("Status:", r.status_code)
-data_raw = r.json()
-print("Tipo:", type(data_raw))
-if isinstance(data_raw, list):
-    print("Len:", len(data_raw))
-    print("Primeiro item (keys):", list(data_raw[0].keys()) if data_raw else "vazio")
-    print("Amostra:", str(data_raw[0])[:400])
-elif isinstance(data_raw, dict):
-    print("Keys:", list(data_raw.keys()))
-    print("Amostra:", str(data_raw)[:400])
-
-print()
-print("=== DEBUG /bolsa/indicador ===")
-r2 = requests.get(f"{BASE_URL}/bolsa/indicador", headers=HEADERS,
-                  params={"ticker": "ABEV3"})
-print("Status:", r2.status_code)
-if r2.status_code == 200:
-    data_raw2 = r2.json()
-    print("Tipo:", type(data_raw2))
-    if isinstance(data_raw2, list):
-        print("Len:", len(data_raw2))
-        print("Primeiro item:", str(data_raw2[0])[:400])
-    elif isinstance(data_raw2, dict):
-        print("Keys:", list(data_raw2.keys()))
-        print("Amostra:", str(data_raw2)[:400])
-else:
-    print("Erro:", r2.text[:300])
-print("=" * 50)
-print()
-
 print("Coletando preços...")
 frames = [fetch_preco_acao(t) for t in TICKERS] + [fetch_ibov()]
 df_precos = pd.concat(frames, axis=1).sort_index().dropna()
@@ -161,19 +127,23 @@ df_preco_tab = pd.DataFrame(metricas_preco).T
 
 
 # ════════════════════════════════════════════════════════════════════
-# Coleta de balanço + DRE e cálculo dos indicadores
+# Coleta de balanço + financeiro + indicador
 # ════════════════════════════════════════════════════════════════════
-print("Coletando balanços e DRE...")
+print("Coletando balanços, DRE e indicadores...")
 
-ind_balanco     = {}
-ind_rentab      = {}
-ind_atividade   = {}
-ind_preco_fund  = {}  # VPA, LPA via /bolsa/indicador
+ind_balanco    = {}
+ind_rentab     = {}
+ind_atividade  = {}
+ind_pfund      = {}
+
+# Último dia de pregão de 2024 disponível nos dados de preço
+DATA_BASE = df_precos[df_precos.index.year == 2024].index[-1].strftime("%Y-%m-%d")
+print(f"Data base para indicadores: {DATA_BASE}")
 
 for ticker in TICKERS:
-    # ── Balanço ──────────────────────────────────────────────────────
-    dfb = fetch_balanco(ticker, ANO_TRI)
 
+    # ── Balanço ──────────────────────────────────────────────────────
+    dfb    = fetch_balanco(ticker, ANO_TRI)
     at     = v(dfb, "1")
     ac     = v(dfb, "1.01")
     cx     = v(dfb, "1.01.01")
@@ -189,7 +159,7 @@ for ticker in TICKERS:
     forn   = v(dfb, "2.01.02")
     emp_cp = v(dfb, "2.01.04")
     pnc    = v(dfb, "2.02")
-    pl     = v(dfb, "2.03")
+    pl_b   = v(dfb, "2.03")
 
     passivo = pc + pnc
     at_fixo = imob + intg + inv
@@ -207,85 +177,94 @@ for ticker in TICKERS:
         "NCG (R$ mil)":             (aco - pco) / 1_000,
         "CGL (R$ mil)":             (ac - pc) / 1_000,
         "ST (R$ mil)":              (acf - pcf) / 1_000,
-        "Relação Capitais":         safe_div(passivo, pl),
+        "Relação Capitais":         safe_div(passivo, pl_b),
         "Endividamento Geral":      safe_div(passivo, at),
         "Solvência Geral":          safe_div(at, passivo),
         "Composição Endividamento": safe_div(pc, passivo),
-        "Imobilização PL":          safe_div(at_fixo, pl),
+        "Imobilização PL":          safe_div(at_fixo, pl_b),
     }
 
-    # ── DRE ──────────────────────────────────────────────────────────
+    # ── Financeiro (DRE resumida) ─────────────────────────────────────
+    fin = fetch_financeiro(ticker, ANO_TRI)
+    rec      = flt(fin.get("receita"))
+    ebit     = flt(fin.get("ebit"))
+    ll       = flt(fin.get("lucro"))
+    pl_f     = flt(fin.get("pl"))
+    div_liq  = flt(fin.get("divida_liquida"))
+    cap_inv  = flt(fin.get("capital"))   # pl + divida_liquida
+
+    ind_rentab[ticker] = {
+        "ROE  (LL / PL)":         safe_div(ll, pl_f),
+        "ROA  (LL / AT)":         safe_div(ll, at),
+        "ROI  (EBIT / AT)":       safe_div(ebit, at),
+        "ROCE (EBIT / AT-PC)":    safe_div(ebit, at - pc),
+        "ROIC (EBIT / Cap.Inv.)": safe_div(ebit, cap_inv),
+        "Margem Líquida":         safe_div(ll, rec),
+        "Receita Líq. (R$ mil)":  rec / 1_000,
+        "Lucro Líq. (R$ mil)":    ll / 1_000,
+        "EBIT (R$ mil)":          ebit / 1_000,
+        "Dívida Líq. (R$ mil)":   div_liq / 1_000,
+    }
+
+    # ── Indicadores de preço — buscado antes da atividade para ter margem_bruta
+    mb = 0.0
     try:
-        dfd = fetch_dre(ticker, ANO_TRI)
-
-        rec   = abs(v(dfd, "3.01"))   # Receita Líquida
-        cmv   = abs(v(dfd, "3.02"))   # CMV/CPV
-        ebit  = v(dfd, "3.05")        # EBIT
-        ll    = v(dfd, "3.09")        # Lucro Líquido
-
-        # Capital investido (PL + Dívida Líquida)
-        div_bruta = emp_cp + v(dfb, "2.02.01")
-        div_liq   = div_bruta - cx - af
-        cap_inv   = pl + div_liq
-
-        # ── Rentabilidade ────────────────────────────────────────────
-        ind_rentab[ticker] = {
-            "ROE  (LL / PL)":          safe_div(ll, pl),
-            "ROA  (LL / AT)":          safe_div(ll, at),
-            "ROI  (EBIT / AT)":        safe_div(ebit, at),
-            "ROCE (EBIT / AT-PC)":     safe_div(ebit, at - pc),
-            "ROIC (EBIT / Cap.Inv.)":  safe_div(ebit, cap_inv),
-            "Margem Bruta":            safe_div(rec - cmv, rec),
-            "Margem Líquida":          safe_div(ll, rec),
-            "Receita Líq. (R$ mil)":   rec / 1_000,
-            "Lucro Líq. (R$ mil)":     ll / 1_000,
-            "EBIT (R$ mil)":           ebit / 1_000,
-        }
-
-        # Compras (precisa de estoque do período anterior — aproximado)
-        compras = cmv + est  # simplificação sem est. inicial
-        ind_atividade[ticker] = {
-            "PME  (Est/CMV×365)":      safe_div(est * 365, cmv),
-            "Giro Estoque (CMV/Est)":  safe_div(cmv, est),
-            "PMRV (CR/Rec×365)":       safe_div(cr * 365, rec),
-            "PMPF (Forn/Comp×365)":    safe_div(forn * 365, compras),
-            "Ciclo Operacional":       (safe_div(est * 365, cmv) or 0) + (safe_div(cr * 365, rec) or 0),
-            "Ciclo Financeiro":        ((safe_div(est * 365, cmv) or 0)
-                                       + (safe_div(cr * 365, rec) or 0)
-                                       - (safe_div(forn * 365, compras) or 0)),
-            "Ciclo Econômico (PME)":   safe_div(est * 365, cmv),
-        }
-
-    except Exception as e:
-        print(f"  [AVISO] DRE de {ticker} não carregou: {e}")
-        ind_rentab[ticker]    = {}
-        ind_atividade[ticker] = {}
-
-    # ── Indicadores de preço via /bolsa/indicador ─────────────────────
-    try:
-        raw = fetch_indicador(ticker, ANO_TRI)
-        # Tenta extrair VPA e LPA — a estrutura varia por API
-        if isinstance(raw, list) and raw:
-            item = raw[0]
-        elif isinstance(raw, dict):
-            item = raw
-        else:
-            item = {}
-
-        ind_preco_fund[ticker] = {
-            "VPA":  item.get("vpa") or item.get("VPA"),
-            "LPA":  item.get("lpa") or item.get("LPA"),
-            "P/L":  item.get("pl")  or item.get("P/L") or item.get("preco_lucro"),
-            "DY":   item.get("dy")  or item.get("DY")  or item.get("dividend_yield"),
+        raw = fetch_indicador(ticker, DATA_BASE)
+        item = raw
+        while isinstance(item, list) and item:
+            item = item[0]
+        if not isinstance(item, dict):
+            raise ValueError(f"Estrutura inesperada: {type(item)}")
+        preco = flt(item.get("preco"))
+        p_vp  = flt(item.get("p_vp"))
+        p_l   = flt(item.get("p_l"))
+        mb    = flt(item.get("margem_bruta"))
+        ind_pfund[ticker] = {
+            "Preço (R$)":   preco,
+            "VPA (R$)":     safe_div(preco, p_vp),
+            "LPA (R$)":     safe_div(preco, p_l),
+            "P/L":          p_l,
+            "P/VPA":        p_vp,
+            "P/EBIT":       flt(item.get("p_ebit")),
+            "EV/EBITDA":    flt(item.get("ev_ebitda")),
+            "DY (%)":       flt(item.get("dividend_yield")),
+            "Margem Bruta": mb,
         }
     except Exception as e:
-        print(f"  [AVISO] Indicador de {ticker} não carregou: {e}")
-        ind_preco_fund[ticker] = {"VPA": None, "LPA": None, "P/L": None, "DY": None}
+        print(f"  [AVISO] Indicador {ticker}: {e}")
+        ind_pfund[ticker] = {"Preço (R$)": None, "VPA (R$)": None, "LPA (R$)": None,
+                             "P/L": None, "P/VPA": None, "P/EBIT": None,
+                             "EV/EBITDA": None, "DY (%)": None, "Margem Bruta": None}
 
-df_cont_tab    = pd.DataFrame(ind_balanco).T
-df_rentab_tab  = pd.DataFrame(ind_rentab).T
-df_ativ_tab    = pd.DataFrame(ind_atividade).T
-df_pfund_tab   = pd.DataFrame(ind_preco_fund).T
+    # ── Atividade (CMV derivado de Receita × (1 - Margem Bruta)) ─────
+    cmv     = rec * (1 - mb) if rec and mb else 0.0
+    compras = cmv  # simplificação sem estoque inicial
+
+    pme  = safe_div(est * 365, cmv)
+    giro = safe_div(cmv, est)
+    pmrv = safe_div(cr * 365, rec)
+    pmpf = safe_div(forn * 365, compras)
+    co   = (pme or 0) + (pmrv or 0) if (pme is not None and pmrv is not None) else None
+    cf   = (co - (pmpf or 0))       if (co  is not None and pmpf is not None) else None
+
+    ind_atividade[ticker] = {
+        "PME  (Est/CMV×365)":     pme,
+        "Giro Estoque (CMV/Est)": giro,
+        "PMRV (CR/Rec×365)":      pmrv,
+        "PMPF (Forn/Comp×365)":   pmpf,
+        "Ciclo Operacional":      co,
+        "Ciclo Financeiro":       cf,
+        "Ciclo Econômico (PME)":  pme,
+        "ACF (Cx + Aplic.)":      acf / 1_000,
+        "ACO (AC - ACF)":         aco / 1_000,
+        "PCF (Emp. CP)":          pcf / 1_000,
+        "PCO (PC - PCF)":         pco / 1_000,
+    }
+
+df_cont_tab   = pd.DataFrame(ind_balanco).T
+df_rentab_tab = pd.DataFrame(ind_rentab).T
+df_ativ_tab   = pd.DataFrame(ind_atividade).T
+df_pfund_tab  = pd.DataFrame(ind_pfund).T
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -300,18 +279,20 @@ def cabecalho(titulo):
     print(f"  {'Indicador':<34}" + "".join(f"{t:>12}" for t in TICKERS))
     print("-" * W)
 
-def linha_num(df, ind, fmt="{:>12.4f}"):
+
+def linha(df, ind, fmt="{:>12.4f}"):
     row = f"  {ind:<34}"
     for t in TICKERS:
-        val = df.loc[t, ind] if t in df.index and ind in df.columns else None
+        val = df.loc[t, ind] if (t in df.index and ind in df.columns) else None
         try:
             row += fmt.format(float(val)) if val is not None else f"{'N/D':>12}"
         except (TypeError, ValueError):
             row += f"{'N/D':>12}"
     print(row)
 
-def separador(label):
-    print(f"\n  {'─'*3} {label} {'─'*(W-8-len(label))}")
+
+def sep(label):
+    print(f"\n  ─── {label} {'─' * (W - 8 - len(label))}")
 
 
 data_ini_str = df_norm.index[0].strftime("%d/%m/%Y")
@@ -326,61 +307,76 @@ for ind, fmt in [
     ("Volatilidade Anual (%)",  "{:>11.1f}% "),
     ("Correlação c/ IBOV",      "{:>12.4f} "),
 ]:
-    linha_num(df_preco_tab, ind, fmt)
+    linha(df_preco_tab, ind, fmt)
 print("=" * W)
 
-# ── Indicadores de Preço/Fundamentalistas ────────────────────────────
-cabecalho(f"INDICADORES DE PREÇO  (ref: {ANO_TRI})")
-for ind in ["VPA", "LPA", "P/L", "DY"]:
-    linha_num(df_pfund_tab, ind, "{:>12.4f}")
+# ── Indicadores de Preço ─────────────────────────────────────────────
+cabecalho(f"INDICADORES DE PREÇO  (ref: {DATA_BASE})")
+for ind, fmt in [
+    ("Preço (R$)",   "{:>12.2f}"),
+    ("VPA (R$)",     "{:>12.2f}"),
+    ("LPA (R$)",     "{:>12.2f}"),
+    ("P/L",          "{:>12.2f}"),
+    ("P/VPA",        "{:>12.2f}"),
+    ("P/EBIT",       "{:>12.2f}"),
+    ("EV/EBITDA",    "{:>12.2f}"),
+    ("DY (%)",       "{:>12.2f}"),
+    ("Margem Bruta", "{:>12.4f}"),
+]:
+    linha(df_pfund_tab, ind, fmt)
 print("=" * W)
 
 # ── Rentabilidade ─────────────────────────────────────────────────────
 cabecalho(f"RENTABILIDADE  (ref: {ANO_TRI})")
 for ind, fmt in [
-    ("ROE  (LL / PL)",          "{:>12.4f}"),
-    ("ROA  (LL / AT)",          "{:>12.4f}"),
-    ("ROI  (EBIT / AT)",        "{:>12.4f}"),
-    ("ROCE (EBIT / AT-PC)",     "{:>12.4f}"),
-    ("ROIC (EBIT / Cap.Inv.)",  "{:>12.4f}"),
-    ("Margem Bruta",            "{:>12.4f}"),
-    ("Margem Líquida",          "{:>12.4f}"),
-    ("Receita Líq. (R$ mil)",   "{:>12,.0f}"),
-    ("Lucro Líq. (R$ mil)",     "{:>12,.0f}"),
-    ("EBIT (R$ mil)",           "{:>12,.0f}"),
+    ("ROE  (LL / PL)",         "{:>12.4f}"),
+    ("ROA  (LL / AT)",         "{:>12.4f}"),
+    ("ROI  (EBIT / AT)",       "{:>12.4f}"),
+    ("ROCE (EBIT / AT-PC)",    "{:>12.4f}"),
+    ("ROIC (EBIT / Cap.Inv.)", "{:>12.4f}"),
+    ("Margem Líquida",         "{:>12.4f}"),
+    ("Receita Líq. (R$ mil)",  "{:>12,.0f}"),
+    ("Lucro Líq. (R$ mil)",    "{:>12,.0f}"),
+    ("EBIT (R$ mil)",          "{:>12,.0f}"),
+    ("Dívida Líq. (R$ mil)",   "{:>12,.0f}"),
 ]:
-    linha_num(df_rentab_tab, ind, fmt)
+    linha(df_rentab_tab, ind, fmt)
 print("=" * W)
 
 # ── Atividade ─────────────────────────────────────────────────────────
 cabecalho(f"ATIVIDADE  (ref: {ANO_TRI})")
+print("  (CMV aproximado via Receita x (1 - Margem Bruta))")
 for ind, fmt in [
-    ("PME  (Est/CMV×365)",      "{:>12.1f}"),
-    ("Giro Estoque (CMV/Est)",  "{:>12.4f}"),
-    ("PMRV (CR/Rec×365)",       "{:>12.1f}"),
-    ("PMPF (Forn/Comp×365)",    "{:>12.1f}"),
-    ("Ciclo Operacional",       "{:>12.1f}"),
-    ("Ciclo Financeiro",        "{:>12.1f}"),
-    ("Ciclo Econômico (PME)",   "{:>12.1f}"),
+    ("PME  (Est/CMV×365)",     "{:>12.1f}"),
+    ("Giro Estoque (CMV/Est)", "{:>12.4f}"),
+    ("PMRV (CR/Rec×365)",      "{:>12.1f}"),
+    ("PMPF (Forn/Comp×365)",   "{:>12.1f}"),
+    ("Ciclo Operacional",      "{:>12.1f}"),
+    ("Ciclo Financeiro",       "{:>12.1f}"),
+    ("Ciclo Econômico (PME)",  "{:>12.1f}"),
+    ("ACF (Cx + Aplic.)",      "{:>12,.0f}"),
+    ("ACO (AC - ACF)",         "{:>12,.0f}"),
+    ("PCF (Emp. CP)",          "{:>12,.0f}"),
+    ("PCO (PC - PCF)",         "{:>12,.0f}"),
 ]:
-    linha_num(df_ativ_tab, ind, fmt)
+    linha(df_ativ_tab, ind, fmt)
 print("=" * W)
 
-# ── Liquidez + Capital de Giro + Endividamento ────────────────────────
+# ── Contábil ──────────────────────────────────────────────────────────
 cabecalho(f"CONTÁBIL  (ref: {ANO_TRI})")
-separador("LIQUIDEZ")
-for ind in ["Liquidez Corrente", "Liquidez Seca", "Liquidez Imediata", "Liquidez Geral", "CCL (R$ mil)"]:
-    fmt = "{:>12,.0f}" if "mil" in ind else "{:>12.4f}"
-    linha_num(df_cont_tab, ind, fmt)
-separador("CAPITAL DE GIRO")
+sep("LIQUIDEZ")
+for ind in ["Liquidez Corrente", "Liquidez Seca", "Liquidez Imediata",
+            "Liquidez Geral", "CCL (R$ mil)"]:
+    linha(df_cont_tab, ind, "{:>12,.0f}" if "mil" in ind else "{:>12.4f}")
+sep("CAPITAL DE GIRO")
 for ind in ["NCG (R$ mil)", "CGL (R$ mil)", "ST (R$ mil)"]:
-    linha_num(df_cont_tab, ind, "{:>12,.0f}")
-separador("ENDIVIDAMENTO")
+    linha(df_cont_tab, ind, "{:>12,.0f}")
+sep("ENDIVIDAMENTO")
 for ind in ["Relação Capitais", "Endividamento Geral", "Solvência Geral",
             "Composição Endividamento", "Imobilização PL"]:
-    linha_num(df_cont_tab, ind, "{:>12.4f}")
+    linha(df_cont_tab, ind, "{:>12.4f}")
 print()
 print("=" * W)
 
 print("\nDataFrames disponíveis:")
-print("  df_preco_tab  | df_pfund_tab | df_rentab_tab | df_ativ_tab | df_cont_tab")
+print("  df_preco_tab | df_pfund_tab | df_rentab_tab | df_ativ_tab | df_cont_tab")
