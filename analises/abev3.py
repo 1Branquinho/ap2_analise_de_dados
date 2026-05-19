@@ -7,7 +7,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 BASE_URL = "https://laboratoriodefinancas.com/api/v2"
 TOKEN    = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzc2NTEyNTU3LCJpYXQiOjE3NzM5MjA1NTcsImp0aSI6IjFkM2QxMDA0YTI4ZDRjMzk5N2ZhM2Q2ZTg3OTZhNjhlIiwidXNlcl9pZCI6Ijk3In0.M83oF3cJTJHKAk36o8hVl72eIzopngrBieqXDqOqgTc"
 HEADERS  = {"Authorization": f"Bearer {TOKEN}"}
-TICKER   = "AMER3"
+TICKER   = "ABEV3"
 
 
 def fetch_balanco(ano_tri):
@@ -74,7 +74,7 @@ pl25     = v(df25, '2.03')
 # Header
 # ─────────────────────────────────────────────
 print('=' * 72)
-print('  ANÁLISE FINANCEIRA — AMERICANAS (AMER3)')
+print('  ANÁLISE FINANCEIRA — AMBEV (ABEV3)')
 print('  Fonte: API laboratoriodefinancas.com  |  Em R$ mil')
 print('=' * 72)
 
