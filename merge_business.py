@@ -1,7 +1,10 @@
+import sys
 import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
+
+sys.stdout.reconfigure(encoding='utf-8')
 
 BASE_URL = "https://laboratoriodefinancas.com/api/v2"
 TOKEN    = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzgwNTcwNzA4LCJpYXQiOjE3Nzc5Nzg3MDgsImp0aSI6IjNmNTBiZWM4OWVkZDQzMWI5NTljZWFkYmFkZTdiNjYyIiwidXNlcl9pZCI6IjExOCJ9.4m2iY0iB32ZKdO6_uZb-H1Cu9zwOXJcenbCHAv-qTFE"
