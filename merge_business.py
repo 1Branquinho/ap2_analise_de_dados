@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 import numpy as np
+import yfinance as yf
 
 BASE_URL = "https://laboratoriodefinancas.com/api/v2"
 TOKEN    = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzgwNTcwNzA4LCJpYXQiOjE3Nzc5Nzg3MDgsImp0aSI6IjNmNTBiZWM4OWVkZDQzMWI5NTljZWFkYmFkZTdiNjYyIiwidXNlcl9pZCI6IjExOCJ9.4m2iY0iB32ZKdO6_uZb-H1Cu9zwOXJcenbCHAv-qTFE"
@@ -46,6 +47,19 @@ def v(df, conta):
 # ════════════════════════════════════════════════════════════════════
 # Funções de coleta
 # ════════════════════════════════════════════════════════════════════
+
+def fetch_market_data(ticker):
+    """Retorna preço atual, qtd. de ações e market cap via yfinance."""
+    try:
+        info = yf.Ticker(f"{ticker}.SA").info
+        preco    = info.get("currentPrice") or info.get("regularMarketPrice") or 0.0
+        n_shares = info.get("sharesOutstanding") or 0
+        mkt_cap  = preco * n_shares if (preco and n_shares) else None
+        return {"preco": preco, "n_shares": n_shares, "mkt_cap": mkt_cap}
+    except Exception as e:
+        print(f"  [AVISO] yfinance {ticker}: {e}")
+        return {"preco": None, "n_shares": None, "mkt_cap": None}
+
 
 def fetch_balanco(ticker, ano_tri):
     resp = requests.get(
@@ -129,12 +143,16 @@ df_preco_tab = pd.DataFrame(metricas_preco).T
 # ════════════════════════════════════════════════════════════════════
 # Coleta de balanço + financeiro + indicador
 # ════════════════════════════════════════════════════════════════════
+print("Coletando dados de mercado (yfinance)...")
+market_data = {t: fetch_market_data(t) for t in TICKERS}
+
 print("Coletando balanços, DRE e indicadores...")
 
 ind_balanco    = {}
 ind_rentab     = {}
 ind_atividade  = {}
 ind_pfund      = {}
+ind_multiplos  = {}
 
 # Último dia de pregão de 2024 disponível nos dados de preço
 DATA_BASE = df_precos[df_precos.index.year == 2024].index[-1].strftime("%Y-%m-%d")
@@ -207,7 +225,7 @@ for ticker in TICKERS:
     }
 
     # ── Indicadores de preço — buscado antes da atividade para ter margem_bruta
-    mb = 0.0
+    p_vp = p_l = mb = 0.0
     try:
         raw = fetch_indicador(ticker, DATA_BASE)
         item = raw
@@ -261,10 +279,119 @@ for ticker in TICKERS:
         "PCO (PC - PCF)":         pco / 1_000,
     }
 
+    # ── Avaliação por Múltiplos ────────────────────────────────────────
+    # Market Cap = Preço × Qtd. Ações  (yfinance)
+    md      = market_data[ticker]
+    mkt_cap = md["mkt_cap"]
+    # Dívida Bruta = Empréstimos CP + Passivo Não Circulante (oneroso)
+    div_bruta = emp_cp + pnc
+    # Caixa = Caixa e Equiv. + Aplicações Financeiras CP
+    caixa     = cx + af
+    # Dívida Líquida = Dívida Bruta − Caixa
+    div_liq_bp = div_bruta - caixa
+    # EV = Market Cap + Dívida Líquida (calculado do balanço)
+    ev = (mkt_cap + div_liq_bp) if mkt_cap is not None else None
+    # EBITDA back-calculado via EV/EBITDA da API
+    ev_ebitda_api = flt(ind_pfund[ticker].get("EV/EBITDA"))
+    ebitda = safe_div(ev, ev_ebitda_api) if (ev and ev_ebitda_api) else None
+
+    ind_multiplos[ticker] = {
+        "Preço (R$)":            md["preco"],
+        "Qtd. Ações (mil)":      (md["n_shares"] / 1_000) if md["n_shares"] else None,
+        "Market Cap (R$ mil)":   (mkt_cap    / 1_000) if mkt_cap    is not None else None,
+        "Dívida Líq. BP (R$ mil)":(div_liq_bp / 1_000),
+        "EV (R$ mil)":           (ev          / 1_000) if ev          is not None else None,
+        "EBITDA est. (R$ mil)":  (ebitda      / 1_000) if ebitda      is not None else None,
+        "Margem EBIT":           safe_div(ebit, rec),
+        "Margem EBITDA":         safe_div(ebitda, rec),
+        "EV / EBITDA":           ev_ebitda_api if ev_ebitda_api else None,
+        "EV / EBIT":             safe_div(ev, ebit),
+        "EV / Receita":          safe_div(ev, rec),
+        "P/L":                   p_l  if p_l  else None,
+        "P/VPA":                 p_vp if p_vp else None,
+        "DY (%)":                flt(ind_pfund[ticker].get("DY (%)")),
+        "PL (R$ mil)":           (pl_f / 1_000) if pl_f else None,
+    }
+
 df_cont_tab   = pd.DataFrame(ind_balanco).T
 df_rentab_tab = pd.DataFrame(ind_rentab).T
 df_ativ_tab   = pd.DataFrame(ind_atividade).T
 df_pfund_tab  = pd.DataFrame(ind_pfund).T
+df_mult_tab   = pd.DataFrame(ind_multiplos).T
+
+
+# ════════════════════════════════════════════════════════════════════
+# Valuation por múltiplos — preço implícito via mediana dos pares
+# ════════════════════════════════════════════════════════════════════
+
+def mediana_pares(ticker, campo, df, apenas_positivos=True):
+    """Mediana dos 2 pares excluindo o próprio ticker e valores inválidos."""
+    vals = []
+    for t in TICKERS:
+        if t == ticker:
+            continue
+        try:
+            v = float(df.loc[t, campo])
+            if not apenas_positivos or v > 0:
+                vals.append(v)
+        except (KeyError, TypeError, ValueError):
+            pass
+    if not vals:
+        return None
+    vals.sort()
+    n = len(vals)
+    return vals[n // 2] if n % 2 == 1 else (vals[n // 2 - 1] + vals[n // 2]) / 2
+
+
+ind_valuation = {}
+for ticker in TICKERS:
+    try:
+        preco_atual = float(df_mult_tab.loc[ticker, "Preço (R$)"])
+        n_shares    = float(df_mult_tab.loc[ticker, "Qtd. Ações (mil)"]) * 1_000
+        div_liq_bp  = float(df_mult_tab.loc[ticker, "Dívida Líq. BP (R$ mil)"]) * 1_000
+
+        ebitda = flt(df_mult_tab.loc[ticker, "EBITDA est. (R$ mil)"]) * 1_000
+        ebit   = flt(df_rentab_tab.loc[ticker, "EBIT (R$ mil)"])       * 1_000
+        rec    = flt(df_rentab_tab.loc[ticker, "Receita Líq. (R$ mil)"]) * 1_000
+        ll     = flt(df_rentab_tab.loc[ticker, "Lucro Líq. (R$ mil)"])   * 1_000
+        pl     = flt(df_mult_tab.loc[ticker,  "PL (R$ mil)"])            * 1_000
+
+        pi = {}  # preços implícitos
+
+        for nome, mult_campo, metrica, ev_based in [
+            ("EV/EBITDA",  "EV / EBITDA", ebitda, True),
+            ("EV/EBIT",    "EV / EBIT",   ebit,   True),
+            ("EV/Receita", "EV / Receita",rec,    True),
+            ("P/L",        "P/L",         ll,     False),
+            ("P/VPA",      "P/VPA",       pl,     False),
+        ]:
+            med = mediana_pares(ticker, mult_campo, df_mult_tab)
+            if med and metrica and metrica > 0 and n_shares:
+                if ev_based:
+                    imp_mktcap = med * metrica - div_liq_bp
+                else:
+                    imp_mktcap = med * metrica
+                pi[nome] = imp_mktcap / n_shares
+
+        validos = [v for v in pi.values() if v is not None]
+        preco_medio = sum(validos) / len(validos) if validos else None
+        upside = ((preco_medio - preco_atual) / preco_atual * 100) if preco_medio else None
+
+        ind_valuation[ticker] = {
+            "Preço Atual (R$)":    preco_atual,
+            "P.Impl. EV/EBITDA":   pi.get("EV/EBITDA"),
+            "P.Impl. EV/EBIT":     pi.get("EV/EBIT"),
+            "P.Impl. EV/Receita":  pi.get("EV/Receita"),
+            "P.Impl. P/L":         pi.get("P/L"),
+            "P.Impl. P/VPA":       pi.get("P/VPA"),
+            "Preço Médio Impl.":   preco_medio,
+            "Upside/Downside (%)": upside,
+        }
+    except Exception as e:
+        print(f"  [AVISO] Valuation {ticker}: {e}")
+        ind_valuation[ticker] = {}
+
+df_val_tab = pd.DataFrame(ind_valuation).T
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -378,5 +505,68 @@ for ind in ["Relação Capitais", "Endividamento Geral", "Solvência Geral",
 print()
 print("=" * W)
 
+# ── Avaliação por Múltiplos ───────────────────────────────────────────
+cabecalho(f"AVALIAÇÃO POR MÚLTIPLOS  (ref: {ANO_TRI} | preços: {DATA_BASE})")
+sep("VALOR DE MERCADO  (Market Cap = Preço × Qtd. Ações — yfinance)")
+for ind, fmt in [
+    ("Preço (R$)",             "{:>12.2f}"),
+    ("Qtd. Ações (mil)",       "{:>12,.0f}"),
+    ("Market Cap (R$ mil)",    "{:>12,.0f}"),
+    ("Dívida Líq. BP (R$ mil)","{:>12,.0f}"),
+    ("EV (R$ mil)",            "{:>12,.0f}"),
+    ("EBITDA est. (R$ mil)",   "{:>12,.0f}"),
+]:
+    linha(df_mult_tab, ind, fmt)
+sep("MÚLTIPLOS DE FIRMA  (EV-based — neutros à estrutura de capital)")
+for ind, fmt in [
+    ("EV / EBITDA", "{:>12.2f}"),
+    ("EV / EBIT",   "{:>12.2f}"),
+    ("EV / Receita","{:>12.4f}"),
+]:
+    linha(df_mult_tab, ind, fmt)
+sep("MÚLTIPLOS DE EQUITY")
+for ind, fmt in [
+    ("P/L",    "{:>12.2f}"),
+    ("P/VPA",  "{:>12.2f}"),
+    ("DY (%)", "{:>12.2f}"),
+]:
+    linha(df_mult_tab, ind, fmt)
+sep("DRIVERS DOS MÚLTIPLOS  (companion variables — Damodaran)")
+print("  P/L  → ROE + crescimento  |  EV/EBITDA → ROIC + crescimento  |  P/VPA → ROE − Ke")
+for ind, fmt in [
+    ("Margem EBIT",            "{:>12.4f}"),
+    ("Margem EBITDA",          "{:>12.4f}"),
+    ("ROE  (LL / PL)",         "{:>12.4f}"),
+    ("ROIC (EBIT / Cap.Inv.)", "{:>12.4f}"),
+]:
+    if ind in df_mult_tab.columns:
+        linha(df_mult_tab, ind, fmt)
+    else:
+        linha(df_rentab_tab, ind, fmt)
+print()
+print("=" * W)
+
+# ── Valuation — Preço Implícito por Múltiplos ────────────────────────
+cabecalho("VALUATION — PREÇO IMPLÍCITO POR MÚLTIPLOS")
+print("  Mediana dos 2 pares aplicada ao dado financeiro de cada empresa")
+sep("PREÇOS IMPLÍCITOS (R$)")
+for ind, fmt in [
+    ("Preço Atual (R$)",   "{:>12.2f}"),
+    ("P.Impl. EV/EBITDA",  "{:>12.2f}"),
+    ("P.Impl. EV/EBIT",    "{:>12.2f}"),
+    ("P.Impl. EV/Receita", "{:>12.2f}"),
+    ("P.Impl. P/L",        "{:>12.2f}"),
+    ("P.Impl. P/VPA",      "{:>12.2f}"),
+]:
+    linha(df_val_tab, ind, fmt)
+sep("RESUMO")
+for ind, fmt in [
+    ("Preço Médio Impl.",   "{:>12.2f}"),
+    ("Upside/Downside (%)", "{:>+11.1f}%"),
+]:
+    linha(df_val_tab, ind, fmt)
+print()
+print("=" * W)
+
 print("\nDataFrames disponíveis:")
-print("  df_preco_tab | df_pfund_tab | df_rentab_tab | df_ativ_tab | df_cont_tab")
+print("  df_preco_tab | df_pfund_tab | df_rentab_tab | df_ativ_tab | df_cont_tab | df_mult_tab | df_val_tab")

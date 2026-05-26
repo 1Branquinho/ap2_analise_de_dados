@@ -105,7 +105,7 @@ ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
 ax.xaxis.set_major_locator(mdates.YearLocator())
 ax.legend(loc="upper left", framealpha=0.9)
 plt.tight_layout()
-plt.savefig("grafico_base100.png", dpi=150, bbox_inches="tight")
+plt.savefig("graficos/grafico_base100.png", dpi=150, bbox_inches="tight")
 plt.show()
 print("✓ grafico_base100.png salvo")
 
@@ -143,7 +143,7 @@ ax.set_xticks(x)
 ax.set_xticklabels(anos)
 ax.legend(loc="lower left", framealpha=0.9)
 plt.tight_layout()
-plt.savefig("grafico_retorno_anual.png", dpi=150, bbox_inches="tight")
+plt.savefig("graficos/grafico_retorno_anual.png", dpi=150, bbox_inches="tight")
 plt.show()
 print("✓ grafico_retorno_anual.png salvo")
 
@@ -171,8 +171,8 @@ ax.set_title(
     fontsize=12, fontweight="bold", pad=12,
 )
 plt.tight_layout()
-plt.savefig("grafico_correlacao.png", dpi=150, bbox_inches="tight")
+plt.savefig("graficos/grafico_correlacao.png", dpi=150, bbox_inches="tight")
 plt.show()
 print("✓ grafico_correlacao.png salvo")
 
-print("\nTodos os gráficos gerados e salvos na pasta analise_acoes/")
+print("\nTodos os gráficos gerados e salvos na pasta graficos/")

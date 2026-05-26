@@ -1,6 +1,7 @@
 import sys
 import requests
 import pandas as pd
+import yfinance as yf
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -8,6 +9,23 @@ BASE_URL = "https://laboratoriodefinancas.com/api/v2"
 TOKEN    = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzc2NTEyNTU3LCJpYXQiOjE3NzM5MjA1NTcsImp0aSI6IjFkM2QxMDA0YTI4ZDRjMzk5N2ZhM2Q2ZTg3OTZhNjhlIiwidXNlcl9pZCI6Ijk3In0.M83oF3cJTJHKAk36o8hVl72eIzopngrBieqXDqOqgTc"
 HEADERS  = {"Authorization": f"Bearer {TOKEN}"}
 TICKER   = "ASAI3"
+
+
+def safe_div(a, b):
+    return (a / b) if b and b != 0 else None
+
+
+def fetch_market_data():
+    try:
+        info     = yf.Ticker(f"{TICKER}.SA").info
+        preco    = info.get("currentPrice") or info.get("regularMarketPrice") or 0.0
+        n_shares = info.get("sharesOutstanding") or 0
+        mkt_cap  = preco * n_shares if (preco and n_shares) else None
+        dy       = (info.get("dividendYield") or 0.0) * 100
+        return {"preco": preco, "n_shares": n_shares, "mkt_cap": mkt_cap, "dy": dy}
+    except Exception as e:
+        print(f"  [AVISO] yfinance {TICKER}: {e}")
+        return {"preco": None, "n_shares": None, "mkt_cap": None, "dy": None}
 
 
 def fetch_balanco(ano_tri):
@@ -28,6 +46,7 @@ def v(df, conta):
 
 def extrair_contas(df):
     return {
+        # BP — Ativo
         'at':     v(df, '1'),
         'ac':     v(df, '1.01'),
         'cx':     v(df, '1.01.01'),
@@ -40,11 +59,19 @@ def extrair_contas(df):
         'inv':    v(df, '1.02.02'),
         'imob':   v(df, '1.02.03'),
         'intg':   v(df, '1.02.04'),
+        # BP — Passivo e PL
         'pc':     v(df, '2.01'),
         'forn':   v(df, '2.01.02'),
         'emp_cp': v(df, '2.01.04'),
         'pnc':    v(df, '2.02'),
         'pl':     v(df, '2.03'),
+        # DRE
+        'rec':    v(df, '3.01'),
+        'lb':     v(df, '3.03'),
+        'ebit':   v(df, '3.05'),
+        'll':     v(df, '3.11'),
+        # DFC — D&A para cálculo do EBITDA
+        'dna':    v(df, '6.01.01.02'),
     }
 
 
@@ -82,11 +109,63 @@ def calcular_endividamento(b):
     at_fixo = imob + intg + inv
     return {
         'passivo': passivo,
-        'rc':  passivo / pl,
-        'eg':  passivo / at,
-        'sg':  at / passivo,
-        'ce':  pc / passivo,
-        'ipl': at_fixo / pl,
+        'rc':  safe_div(passivo, pl),
+        'eg':  safe_div(passivo, at),
+        'sg':  safe_div(at, passivo),
+        'ce':  safe_div(pc, passivo),
+        'ipl': safe_div(at_fixo, pl),
+    }
+
+
+def calcular_multiplos(b, md):
+    rec    = b['rec']
+    lb     = b['lb']
+    ebit   = b['ebit']
+    ll     = b['ll']
+    pl_val = b['pl']
+    dna    = abs(b['dna'])
+    ebitda = ebit + dna
+
+    preco    = md['preco']    or 0.0
+    n_shares = md['n_shares'] or 0
+    mkt_cap  = md['mkt_cap']
+
+    div_bruta = b['emp_cp'] + b['pnc']
+    caixa     = b['cx'] + b['af']
+    div_liq   = div_bruta - caixa
+    ev        = (mkt_cap + div_liq) if mkt_cap else None
+
+    lpa   = safe_div(ll, n_shares)     if n_shares else None
+    vpa   = safe_div(pl_val, n_shares) if n_shares else None
+    p_l   = safe_div(preco, lpa)   if (lpa and lpa > 0) else None
+    p_vpa = safe_div(preco, vpa)   if (vpa and vpa > 0) else None
+
+    return {
+        'preco':     preco,
+        'n_shares':  n_shares,
+        'mkt_cap':   mkt_cap,
+        'div_liq':   div_liq,
+        'ev':        ev,
+        'rec':       rec,
+        'lb':        lb,
+        'ebit':      ebit,
+        'ebitda':    ebitda,
+        'll':        ll,
+        'lpa':       lpa,
+        'vpa':       vpa,
+        'mb':        safe_div(lb, rec),
+        'm_ebit':    safe_div(ebit, rec),
+        'm_ebitda':  safe_div(ebitda, rec),
+        'm_liq':     safe_div(ll, rec),
+        'ev_ebitda': safe_div(ev, ebitda) if ev is not None else None,
+        'ev_ebit':   safe_div(ev, ebit)   if ev is not None else None,
+        'ev_rec':    safe_div(ev, rec)    if ev is not None else None,
+        'p_l':       p_l,
+        'p_vpa':     p_vpa,
+        'dy':        md['dy'],
+        'roe':       safe_div(ll, pl_val),
+        'roa':       safe_div(ll, b['at']),
+        'roi':       safe_div(ebit, b['at']),
     }
 
 
@@ -118,6 +197,31 @@ def imprimir_balanco(b24, b25):
     ]
     for label, val24, val25 in linhas:
         print(f'{label:<38} {val24/1_000:>15,.0f} {val25/1_000:>15,.0f}')
+
+
+def imprimir_dre(b24, b25):
+    print('\n' + '─' * 72)
+    print('  DEMONSTRAÇÃO DO RESULTADO (R$ mil)')
+    print('─' * 72)
+    print(f'{"Conta":<38} {"2024":>15} {"2025":>15}')
+    print('─' * 72)
+    dna24, dna25 = abs(b24['dna']), abs(b25['dna'])
+    ebitda24 = b24['ebit'] + dna24
+    ebitda25 = b25['ebit'] + dna25
+
+    def pct(val, base):
+        return f'{val/base*100:>14.1f}%' if base else f'{"N/D":>15}'
+
+    print(f'{"Receita Líquida":<38} {b24["rec"]/1_000:>15,.0f} {b25["rec"]/1_000:>15,.0f}')
+    print(f'{"Lucro Bruto":<38} {b24["lb"]/1_000:>15,.0f} {b25["lb"]/1_000:>15,.0f}')
+    print(f'{"  Margem Bruta":<38} {pct(b24["lb"], b24["rec"])} {pct(b25["lb"], b25["rec"])}')
+    print(f'{"EBIT":<38} {b24["ebit"]/1_000:>15,.0f} {b25["ebit"]/1_000:>15,.0f}')
+    print(f'{"  Margem EBIT":<38} {pct(b24["ebit"], b24["rec"])} {pct(b25["ebit"], b25["rec"])}')
+    print(f'{"D&A (Deprec. e Amortização)":<38} {dna24/1_000:>15,.0f} {dna25/1_000:>15,.0f}')
+    print(f'{"EBITDA  (EBIT + D&A)":<38} {ebitda24/1_000:>15,.0f} {ebitda25/1_000:>15,.0f}')
+    print(f'{"  Margem EBITDA":<38} {pct(ebitda24, b24["rec"])} {pct(ebitda25, b25["rec"])}')
+    print(f'{"Lucro Líquido":<38} {b24["ll"]/1_000:>15,.0f} {b25["ll"]/1_000:>15,.0f}')
+    print(f'{"  Margem Líquida":<38} {pct(b24["ll"], b24["rec"])} {pct(b25["ll"], b25["rec"])}')
 
 
 def imprimir_liquidez(b24, b25):
@@ -160,29 +264,74 @@ def imprimir_endividamento(b24, b25):
     print('─' * 72)
     e24 = calcular_endividamento(b24)
     e25 = calcular_endividamento(b25)
-    print(f'{"Relação de Capitais  (Passivo / PL)":<45} {e24["rc"]:>12.4f} {e25["rc"]:>12.4f}')
-    print(f'{"Endividamento Geral  (Passivo / AT)":<45} {e24["eg"]:>12.4f} {e25["eg"]:>12.4f}')
-    print(f'{"Solvência Geral  (AT / Passivo)":<45} {e24["sg"]:>12.4f} {e25["sg"]:>12.4f}')
-    print(f'{"Composição Endividamento  (PC / Passivo)":<45} {e24["ce"]:>12.4f} {e25["ce"]:>12.4f}')
-    print(f'{"Imobilização do PL  (At.Fixo / PL)":<45} {e24["ipl"]:>12.4f} {e25["ipl"]:>12.4f}')
+    def fr(v): return f'{v:>12.4f}' if v is not None else f'{"N/D":>12}'
+    print(f'{"Relação de Capitais  (Passivo / PL)":<45} {fr(e24["rc"])} {fr(e25["rc"])}')
+    print(f'{"Endividamento Geral  (Passivo / AT)":<45} {fr(e24["eg"])} {fr(e25["eg"])}')
+    print(f'{"Solvência Geral  (AT / Passivo)":<45} {fr(e24["sg"])} {fr(e25["sg"])}')
+    print(f'{"Composição Endividamento  (PC / Passivo)":<45} {fr(e24["ce"])} {fr(e25["ce"])}')
+    print(f'{"Imobilização do PL  (At.Fixo / PL)":<45} {fr(e24["ipl"])} {fr(e25["ipl"])}')
+
+
+def imprimir_multiplos(m):
+    def val(v, fmt): return fmt.format(v) if v is not None else f'{"N/D":>15}'
+    def pct(v):      return f'{v*100:>14.1f}%' if v is not None else f'{"N/D":>15}'
+
+    print('\n' + '─' * 72)
+    print('  AVALIAÇÃO POR MÚLTIPLOS  (Market Cap = Preço × Qtd. Ações — yfinance)')
+    print('─' * 72)
+
+    print(f'\n  ── VALOR DE MERCADO {"─" * 49}')
+    print(f'  {"Preço (R$)":<42} {val(m["preco"], "{:>15.2f}")}')
+    print(f'  {"Qtd. Ações (mil)":<42} {val(m["n_shares"] / 1_000 if m["n_shares"] else None, "{:>15,.0f}")}')
+    print(f'  {"Market Cap (R$ mil)":<42} {val(m["mkt_cap"] / 1_000 if m["mkt_cap"] else None, "{:>15,.0f}")}')
+    print(f'  {"Dívida Líquida BP (R$ mil)":<42} {val(m["div_liq"] / 1_000, "{:>15,.0f}")}')
+    print(f'  {"EV (R$ mil)":<42} {val(m["ev"] / 1_000 if m["ev"] is not None else None, "{:>15,.0f}")}')
+    print(f'  {"EBITDA (R$ mil)":<42} {val(m["ebitda"] / 1_000 if m["ebitda"] else None, "{:>15,.0f}")}')
+    print(f'  {"LPA (R$)":<42} {val(m["lpa"], "{:>15.4f}")}')
+    print(f'  {"VPA (R$)":<42} {val(m["vpa"], "{:>15.4f}")}')
+
+    print(f'\n  ── MÚLTIPLOS DE FIRMA (EV-based) {"─" * 37}')
+    print(f'  {"EV / EBITDA":<42} {val(m["ev_ebitda"], "{:>15.2f}")}')
+    print(f'  {"EV / EBIT":<42} {val(m["ev_ebit"], "{:>15.2f}")}')
+    print(f'  {"EV / Receita":<42} {val(m["ev_rec"], "{:>15.4f}")}')
+
+    print(f'\n  ── MÚLTIPLOS DE EQUITY {"─" * 46}')
+    print(f'  {"P / L":<42} {val(m["p_l"], "{:>15.2f}")}')
+    print(f'  {"P / VPA":<42} {val(m["p_vpa"], "{:>15.2f}")}')
+    dy_s = f'{m["dy"]:>14.2f}%' if m["dy"] is not None else f'{"N/D":>15}'
+    print(f'  {"DY (Dividend Yield)":<42} {dy_s}')
+
+    print(f'\n  ── RENTABILIDADE {"─" * 52}')
+    print(f'  {"Margem Bruta":<42} {pct(m["mb"])}')
+    print(f'  {"Margem EBIT":<42} {pct(m["m_ebit"])}')
+    print(f'  {"Margem EBITDA":<42} {pct(m["m_ebitda"])}')
+    print(f'  {"Margem Líquida":<42} {pct(m["m_liq"])}')
+    print(f'  {"ROE  (LL / PL)":<42} {pct(m["roe"])}')
+    print(f'  {"ROA  (LL / AT)":<42} {pct(m["roa"])}')
+    print(f'  {"ROI  (EBIT / AT)":<42} {pct(m["roi"])}')
 
 
 def main():
+    print(f'Buscando dados para {TICKER}...')
+    md   = fetch_market_data()
     df24 = fetch_balanco("20244T")
     df25 = fetch_balanco("20254T")
 
     b24 = extrair_contas(df24)
     b25 = extrair_contas(df25)
+    m   = calcular_multiplos(b25, md)
 
     print('=' * 72)
     print('  ANÁLISE FINANCEIRA — ASSAI (ASAI3)')
-    print('  Fonte: API laboratoriodefinancas.com  |  Em R$ mil')
+    print('  Fonte: API laboratoriodefinancas.com | yfinance  |  Em R$ mil')
     print('=' * 72)
 
     imprimir_balanco(b24, b25)
+    imprimir_dre(b24, b25)
     imprimir_liquidez(b24, b25)
     imprimir_fleuriet(b24, b25)
     imprimir_endividamento(b24, b25)
+    imprimir_multiplos(m)
 
     print('\n' + '=' * 72)
 
