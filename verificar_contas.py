@@ -8,7 +8,7 @@ HEADERS  = {"Authorization": f"Bearer {TOKEN}"}
 resp = requests.get(
     f"{BASE_URL}/bolsa/balanco",
     headers=HEADERS,
-    params={"ticker": "ABEV3", "ano_tri": "20244T"},
+    params={"ticker": "ABEV3", "ano_tri": "20254T"},
 )
 resp.raise_for_status()
 
@@ -17,7 +17,7 @@ df["conta"] = df["conta"].astype(str)
 df = df.sort_values("conta")
 
 print("=" * 60)
-print("  TODAS AS CONTAS RETORNADAS — ABEV3 20244T")
+print("  TODAS AS CONTAS RETORNADAS — ABEV3 20254T")
 print("=" * 60)
 print(f"{'Conta':<15} {'Descrição':<35} {'Valor':>10}")
 print("-" * 60)

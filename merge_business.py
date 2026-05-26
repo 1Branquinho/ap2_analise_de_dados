@@ -8,7 +8,7 @@ TOKEN    = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiw
 HEADERS  = {"Authorization": f"Bearer {TOKEN}"}
 
 TICKERS  = ["ABEV3", "AMER3", "ASAI3"]
-ANO_TRI  = "20244T"
+ANO_TRI  = "20254T"
 DATA_INI = "2020-01-01"
 DATA_FIM = "2025-12-31"
 W        = 72
@@ -19,7 +19,7 @@ W        = 72
 # ════════════════════════════════════════════════════════════════════
 
 def ano_tri_to_date(ano_tri):
-    """Converte '20244T' → '2024-12-31'"""
+    """Converte '20254T' → '2025-12-31'"""
     year = ano_tri[:4]
     q    = ano_tri[4]
     fim  = {"1": "03-31", "2": "06-30", "3": "09-30", "4": "12-31"}
@@ -154,8 +154,8 @@ ind_atividade  = {}
 ind_pfund      = {}
 ind_multiplos  = {}
 
-# Último dia de pregão de 2024 disponível nos dados de preço
-DATA_BASE = df_precos[df_precos.index.year == 2024].index[-1].strftime("%Y-%m-%d")
+# Último dia de pregão de 2025 disponível nos dados de preço
+DATA_BASE = df_precos[df_precos.index.year == 2025].index[-1].strftime("%Y-%m-%d")
 print(f"Data base para indicadores: {DATA_BASE}")
 
 for ticker in TICKERS:
