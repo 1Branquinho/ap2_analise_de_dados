@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir graficos *)",
+      "Bash(git mv *)",
+      "Bash(git rm *)",
+      "Bash(where obsidian *)",
+      "Bash(dir \"C:\\\\Users\\\\felip\" /b /ad)",
+      "Bash(findstr -i \"obsidian vault\")",
+      "Bash(python verificar_contas.py)",
+      "Bash(python -m py_compile analises_balanco/abev3.py)",
+      "Bash(python -m py_compile analises_balanco/amer3.py)",
+      "Bash(python -m py_compile analises_balanco/asai3.py)",
+      "Bash(Get-ChildItem -Recurse -File)",
+      "Bash(Select-Object FullName, Length)",
+      "Bash(Format-Table -AutoSize)"
+    ]
+  }
+}
