@@ -1,12 +1,15 @@
+import os
 import sys
 import requests
 import pandas as pd
 import yfinance as yf
+from dotenv import load_dotenv
 
 sys.stdout.reconfigure(encoding='utf-8')
 
+load_dotenv()
 BASE_URL = "https://laboratoriodefinancas.com/api/v2"
-TOKEN    = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzc2NTEyNTU3LCJpYXQiOjE3NzM5MjA1NTcsImp0aSI6IjFkM2QxMDA0YTI4ZDRjMzk5N2ZhM2Q2ZTg3OTZhNjhlIiwidXNlcl9pZCI6Ijk3In0.M83oF3cJTJHKAk36o8hVl72eIzopngrBieqXDqOqgTc"
+TOKEN    = os.getenv("LAB_FIN_TOKEN") or "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzgwNTcwNzA4LCJpYXQiOjE3Nzc5Nzg3MDgsImp0aSI6IjNmNTBiZWM4OWVkZDQzMWI5NTljZWFkYmFkZTdiNjYyIiwidXNlcl9pZCI6IjExOCJ9.4m2iY0iB32ZKdO6_uZb-H1Cu9zwOXJcenbCHAv-qTFE"
 HEADERS  = {"Authorization": f"Bearer {TOKEN}"}
 TICKER   = "ABEV3"
 
@@ -40,7 +43,9 @@ def fetch_balanco(ano_tri):
 
 
 def v(df, conta):
-    res = df[df["conta"] == conta]["valor"]
+    if df.empty:
+        return 0.0
+    res = df[df["conta"].astype(str) == str(conta)]["valor"]
     return float(res.iloc[0]) if not res.empty else 0.0
 
 
@@ -133,10 +138,14 @@ def calcular_multiplos(b, md):
     div_bruta = b['emp_cp'] + b['pnc']
     caixa     = b['cx'] + b['af']
     div_liq   = div_bruta - caixa
-    ev        = (mkt_cap + div_liq) if mkt_cap else None
+    
+    # Ajusta escala: div_liq está em milhares e mkt_cap em reais
+    div_liq_raw = div_liq * 1000.0
+    ev          = (mkt_cap + div_liq_raw) if mkt_cap else None
 
-    lpa   = safe_div(ll, n_shares)     if n_shares else None
-    vpa   = safe_div(pl_val, n_shares) if n_shares else None
+    # Ajusta ll e pl_val para reais para obter LPA e VPA unitários reais
+    lpa   = safe_div(ll * 1000.0, n_shares)     if n_shares else None
+    vpa   = safe_div(pl_val * 1000.0, n_shares) if n_shares else None
     p_l   = safe_div(preco, lpa)   if (lpa and lpa > 0) else None
     p_vpa = safe_div(preco, vpa)   if (vpa and vpa > 0) else None
 
@@ -144,7 +153,7 @@ def calcular_multiplos(b, md):
         'preco':     preco,
         'n_shares':  n_shares,
         'mkt_cap':   mkt_cap,
-        'div_liq':   div_liq,
+        'div_liq':   div_liq_raw,
         'ev':        ev,
         'rec':       rec,
         'lb':        lb,
@@ -157,9 +166,9 @@ def calcular_multiplos(b, md):
         'm_ebit':    safe_div(ebit, rec),
         'm_ebitda':  safe_div(ebitda, rec),
         'm_liq':     safe_div(ll, rec),
-        'ev_ebitda': safe_div(ev, ebitda) if ev is not None else None,
-        'ev_ebit':   safe_div(ev, ebit)   if ev is not None else None,
-        'ev_rec':    safe_div(ev, rec)    if ev is not None else None,
+        'ev_ebitda': safe_div(ev, ebitda * 1000.0) if ev is not None else None,
+        'ev_ebit':   safe_div(ev, ebit * 1000.0)   if ev is not None else None,
+        'ev_rec':    safe_div(ev, rec * 1000.0)    if ev is not None else None,
         'p_l':       p_l,
         'p_vpa':     p_vpa,
         'dy':        md['dy'],
@@ -311,6 +320,185 @@ def imprimir_multiplos(m):
     print(f'  {"ROI  (EBIT / AT)":<42} {pct(m["roi"])}')
 
 
+def calcular_e_imprimir_eva(b25, md, ticker):
+    # Premissas
+    RF = 0.1075          # Selic 2025 (10.75%)
+    ERP = 0.0550         # Prêmio de risco de mercado (5.5%)
+    KD_PRE_TAX = 0.130   # Custo nominal da dívida (13%)
+    TAX_RATE = 0.34      # Alíquota de impostos (IRPJ + CSLL)
+    KD_AFTER_TAX = KD_PRE_TAX * (1 - TAX_RATE)  # 8.58%
+
+    print("\nCalculando o Beta dinâmico contra o IBOV (2021-2025)...")
+    try:
+        data_ini, data_fim = "2020-01-01", "2025-12-31"
+        resp_p = requests.get(
+            f"{BASE_URL}/preco/corrigido", headers=HEADERS,
+            params={"ticker": ticker, "data_ini": data_ini, "data_fim": data_fim},
+        )
+        resp_p.raise_for_status()
+        df_p = pd.DataFrame(resp_p.json())
+        df_p["data"] = pd.to_datetime(df_p["data"])
+        df_p["fechamento"] = pd.to_numeric(df_p["fechamento"], errors="coerce")
+        df_p = df_p.set_index("data")[["fechamento"]].rename(columns={"fechamento": ticker})
+
+        resp_i = requests.get(
+            f"{BASE_URL}/preco/diversos", headers=HEADERS,
+            params={"ticker": "ibov", "data_ini": data_ini, "data_fim": data_fim},
+        )
+        resp_i.raise_for_status()
+        df_i = pd.DataFrame(resp_i.json())
+        df_i["data"] = pd.to_datetime(df_i["data"])
+        df_i["fechamento"] = pd.to_numeric(df_i["fechamento"], errors="coerce")
+        df_i = df_i.set_index("data")[["fechamento"]].rename(columns={"fechamento": "IBOV"})
+
+        df_precos = pd.concat([df_p, df_i], axis=1).sort_index().dropna()
+        ret_diarios = df_precos.pct_change().dropna()
+        cov = ret_diarios[ticker].cov(ret_diarios["IBOV"])
+        var_m = ret_diarios["IBOV"].var()
+        beta = cov / var_m
+    except Exception as e:
+        print(f"  [AVISO] Erro no cálculo do Beta dinâmico, usando proxy. Detalhe: {e}")
+        proxies = {"ABEV3": 0.7571, "AMER3": 1.4331, "ASAI3": 1.2728}
+        beta = proxies.get(ticker, 1.0)
+
+    # Custo de Capital Próprio (CAPM)
+    ke = RF + beta * ERP
+
+    # Lucro Operacional Líquido Após Impostos (NOPAT)
+    ebit = b25['ebit']
+    nopat = ebit * (1 - TAX_RATE)
+
+    # Capital Investido
+    div_bruta = b25['emp_cp'] + b25['pnc']
+    caixa_total = b25['cx'] + b25['af']
+    cap_investido = b25['pl'] + div_bruta - caixa_total
+
+    # Estrutura de Capital (PL negativo)
+    e_weight = max(b25['pl'], 0.0)
+    d_weight = max(div_bruta, 0.0)
+    total_val = e_weight + d_weight
+
+    if total_val > 0:
+        we = e_weight / total_val
+        wd = d_weight / total_val
+        wacc = (ke * we) + (KD_AFTER_TAX * wd)
+    else:
+        wacc = KD_AFTER_TAX
+
+    # EVA
+    custo_oportunidade = cap_investido * wacc
+    eva = nopat - custo_oportunidade
+    roic = safe_div(ebit, cap_investido) or 0.0
+
+    # Imprimir Relatório de EVA no Terminal
+    print('\n' + '─' * 72)
+    print('  CÁLCULO DO CUSTO DE CAPITAL E EVA (Economic Value Added) - 2025')
+    print('─' * 72)
+    print(f'  {"Beta Sistemático (vs IBOV)":<42} {beta:>15.4f}')
+    print(f'  {"Custo de Capital Próprio (Ke)":<42} {ke*100:>14.2f}%')
+    print(f'  {"Custo de Capital Alheio (Kd pós-tax)":<42} {KD_AFTER_TAX*100:>14.2f}%')
+    print(f'  {"Custo Médio Ponderado (WACC)":<42} {wacc*100:>14.2f}%')
+    print(f'  {"NOPAT (EBIT x (1 - t)) (R$ mil)":<42} {nopat/1_000:>15,.0f}')
+    print(f'  {"Capital Investido (PL + Dívida - Cx) (R$ mil)":<42} {cap_investido/1_000:>15,.0f}')
+    print(f'  {"Custo de Oportunidade Cobrado (R$ mil)":<42} {custo_oportunidade/1_000:>15,.0f}')
+    print(f'  {"EVA (Valor Adicionado Econômico) (R$ mil)":<42} {eva/1_000:>+15,.0f}')
+    print('─' * 72)
+
+    # Salva cache JSON
+    if not os.path.exists("graficos"):
+        os.makedirs("graficos")
+        
+    dna = abs(b25['dna'])
+    ebitda = b25['ebit'] + dna
+    div_bruta = b25['emp_cp'] + b25['pnc']
+    caixa_total = b25['cx'] + b25['af']
+    div_liq = div_bruta - caixa_total
+    
+    preco = md.get("preco") or 0.0
+    n_shares = md.get("n_shares") or 0
+    mkt_cap = md.get("mkt_cap") or 0.0
+    dy = md.get("dy") or 0.0
+    
+    # Ajusta escala: div_liq está em milhares e mkt_cap em reais
+    div_liq_raw = div_liq * 1000.0
+    ev = (mkt_cap + div_liq_raw) if mkt_cap else 0.0
+    
+    # Ajusta ll e pl para reais para obter LPA e VPA unitários reais
+    lpa = safe_div(b25['ll'] * 1000.0, n_shares) if n_shares else 0.0
+    vpa = safe_div(b25['pl'] * 1000.0, n_shares) if n_shares else 0.0
+    
+    p_l = safe_div(preco, lpa) if (lpa and lpa > 0) else None
+    p_vpa = safe_div(preco, vpa) if (vpa and vpa > 0) else None
+    ev_ebitda = safe_div(ev, ebitda * 1000.0) if (ev and ebitda != 0) else None
+    ev_ebit = safe_div(ev, b25['ebit'] * 1000.0) if (ev and b25['ebit'] != 0) else None
+    
+    cache_data = {
+        "ticker": ticker,
+        # Balanço
+        "at": b25['at'],
+        "ac": b25['ac'],
+        "anc": b25['anc'],
+        "pc": b25['pc'],
+        "pnc": b25['pnc'],
+        "pl": b25['pl'],
+        "cx": caixa_total,
+        "div_bruta": div_bruta,
+        "div_liq": div_liq,
+        # DRE
+        "receita": b25['rec'],
+        "lb": b25['lb'],
+        "mb": safe_div(b25['lb'], b25['rec']) or 0.0,
+        "ebitda": ebitda,
+        "m_ebitda": safe_div(ebitda, b25['rec']) or 0.0,
+        "ebit": b25['ebit'],
+        "m_ebit": safe_div(b25['ebit'], b25['rec']) or 0.0,
+        "nopat": nopat,
+        "ll": b25['ll'],
+        "margem_liq": safe_div(b25['ll'], b25['rec']) or 0.0,
+        # Liquidez
+        "lc": safe_div(b25['ac'], b25['pc']) or 0.0,
+        "ls": safe_div(b25['ac'] - b25['est'] - b25['da'], b25['pc']) or 0.0,
+        "li": safe_div(b25['cx'], b25['pc']) or 0.0,
+        "lg": safe_div(b25['ac'] + b25['arlp'], b25['pc'] + b25['pnc']) or 0.0,
+        "ccl": b25['ac'] - b25['pc'],
+        # Fleuriet
+        "aco": b25['ac'] - caixa_total,
+        "pco": b25['pc'] - b25['emp_cp'],
+        "ncg": (b25['ac'] - caixa_total) - (b25['pc'] - b25['emp_cp']),
+        "st": caixa_total - b25['emp_cp'],
+        # Endividamento
+        "eg": safe_div(b25['pc'] + b25['pnc'], b25['at']) or 0.0,
+        "rc": safe_div(b25['pc'] + b25['pnc'], b25['pl']) or 0.0,
+        "ce": safe_div(b25['pc'], b25['pc'] + b25['pnc']) or 0.0,
+        # Rentabilidade & EVA
+        "roe": safe_div(b25['ll'], b25['pl']) or 0.0,
+        "roa": safe_div(b25['ll'], b25['at']) or 0.0,
+        "roi": safe_div(b25['ebit'], b25['at']) or 0.0,
+        "roic": roic,
+        "beta": beta,
+        "ke": ke,
+        "wacc": wacc,
+        "cap_investido": cap_investido,
+        "eva": eva,
+        # Múltiplos
+        "preco": preco,
+        "n_shares": n_shares,
+        "mkt_cap": mkt_cap,
+        "ev": ev,
+        "p_l": p_l,
+        "p_vpa": p_vpa,
+        "dy": dy,
+        "ev_ebitda": ev_ebitda,
+        "ev_ebit": ev_ebit
+    }
+    
+    import json
+    with open(f"graficos/dados_{ticker.lower()}.json", "w", encoding="utf-8") as f:
+        json.dump(cache_data, f, ensure_ascii=False, indent=4)
+        
+    print(f"✓ Cache dos indicadores contábeis salvo em 'graficos/dados_{ticker.lower()}.json'")
+
+
 def main():
     print(f'Buscando dados para {TICKER}...')
     md   = fetch_market_data()
@@ -332,9 +520,12 @@ def main():
     imprimir_fleuriet(b24, b25)
     imprimir_endividamento(b24, b25)
     imprimir_multiplos(m)
+    
+    calcular_e_imprimir_eva(b25, md, TICKER)
 
     print('\n' + '=' * 72)
 
 
 if __name__ == '__main__':
     main()
+
